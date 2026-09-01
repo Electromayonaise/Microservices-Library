@@ -1,23 +1,39 @@
 {
   "info": {
     "name": "Biblioteca - Circulacion + Keycloak",
-    "description": "Requisitos: `docker compose up -d --build` corriendo (los 4 microservicios) y Keycloak con el realm `biblioteca` ya configurado (cliente `circulacion-service` confidencial, direct access grants ON, rol de REALM `ROLE_LIBRARIAN` asignado al usuario `librarian1`). Antes de correr la coleccion, edita las variables `client_secret` y `password` (Collection > Variables). Luego corre las requests EN ORDEN (1 a 5), con 'Run collection' o una por una - cada una depende de la anterior. Los datos son en memoria (H2): si vuelves a correr la coleccion despues de un `docker compose restart` de circulacion/catalogo, funciona igual sin tocar nada mas.",
+    "description": "Requisitos: `docker compose up -d --build` corriendo (los 4 microservicios) y Keycloak con el realm `biblioteca` ya configurado, con 4 clientes CONFIDENCIALES (direct access grants ON): `circulacion-service`, `catalogo-service`, `notificacion-service`, `usuario-service`. Roles de REALM `ROLE_LIBRARIAN` (asignado a `librarian1`) y `ROLE_USER` (asignado a `user1`).\n\nCada microservicio valida no solo el rol sino tambien el claim `azp` del token (que cliente de Keycloak lo emitio) contra su propia whitelist `keycloak.allowed-clients` - por eso hay un request '(Obtener Token)' dedicado por cada cliente/servicio en vez de reusar siempre el mismo token. Cada cliente tiene su propio secret en Keycloak, por eso hay 4 variables separadas: `client_secret` (circulacion-service), `client_secret_catalogo`, `client_secret_usuarios`, `client_secret_notificacion`.\n\nAntes de correr la coleccion, edita esas 4 variables de secret y las de `password` (Collection > Variables). Luego corre las requests EN ORDEN, con 'Run collection' o una por una - la mayoria dependen de las anteriores (tokens guardados en variables). Los datos son en memoria (H2): si vuelves a correr la coleccion despues de un `docker compose restart`, funciona igual sin tocar nada mas.\n\nRequests 1-8: flujo original de circulacion-service (token, endpoint publico, prestar/consultar/devolver con ROLE_LIBRARIAN, y verificacion de que ROLE_USER puede consultar pero no prestar).\nRequest 9: token invalido/malformado contra catalogo-service (401) + instrucciones para probar un token EXPIRADO manualmente.\nRequests 10-14: catalogo-service, usando su propio cliente `catalogo-service` (ROLE_LIBRARIAN y ROLE_USER pueden consultar libros; solo ROLE_LIBRARIAN puede actualizar disponibilidad).\nRequests 15-18: usuario-service, usando su propio cliente `usuario-service` (solo ROLE_LIBRARIAN puede consultar; ROLE_USER recibe 403).\nRequests 19-22: notificacion-service, usando su propio cliente `notificacion-service` (solo ROLE_LIBRARIAN puede enviar notificaciones; ROLE_USER recibe 403).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     { "key": "keycloak_url", "value": "http://localhost:8095" },
     { "key": "realm", "value": "biblioteca" },
     { "key": "client_id", "value": "circulacion-service" },
+    { "key": "client_id_catalogo", "value": "catalogo-service" },
+    { "key": "client_id_usuarios", "value": "usuario-service" },
+    { "key": "client_id_notificacion", "value": "notificacion-service" },
     { "key": "client_secret", "value": "PON_AQUI_TU_SECRET" },
+    { "key": "client_secret_catalogo", "value": "PON_AQUI_TU_SECRET" },
+    { "key": "client_secret_usuarios", "value": "PON_AQUI_TU_SECRET" },
+    { "key": "client_secret_notificacion", "value": "PON_AQUI_TU_SECRET" },
     { "key": "username", "value": "librarian1" },
     { "key": "password", "value": "Librarian@2026" },
     { "key": "username_user", "value": "user1" },
     { "key": "password_user", "value": "User@2026" },
     { "key": "circulacion_url", "value": "http://localhost:8083" },
+    { "key": "catalogo_url", "value": "http://localhost:8082" },
+    { "key": "usuarios_url", "value": "http://localhost:8081" },
+    { "key": "notificacion_url", "value": "http://localhost:8084" },
     { "key": "access_token", "value": "" },
     { "key": "access_token_user", "value": "" },
+    { "key": "access_token_catalogo", "value": "" },
+    { "key": "access_token_catalogo_user", "value": "" },
+    { "key": "access_token_usuarios", "value": "" },
+    { "key": "access_token_usuarios_user", "value": "" },
+    { "key": "access_token_notificacion", "value": "" },
+    { "key": "access_token_notificacion_user", "value": "" },
     { "key": "libro_id_prueba", "value": "1" },
     { "key": "usuario_id_prueba", "value": "U001" },
+    { "key": "usuario_id_real", "value": "1" },
     { "key": "prestamo_id_devolver", "value": "" }
   ],
   "item": [
@@ -278,6 +294,481 @@
             "type": "text/javascript",
             "exec": [
               "pm.test('ROLE_USER NO puede prestar (403 esperado)', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. Token invalido/malformado (debe dar 401)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "esto.no.es.un.jwt.valido" }]
+        },
+        "url": {
+          "raw": "{{catalogo_url}}/libros/{{libro_id_prueba}}",
+          "host": ["{{catalogo_url}}"],
+          "path": ["libros", "{{libro_id_prueba}}"]
+        },
+        "description": "Prueba de token invalido/malformado: se manda un bearer token que no es un JWT real. El resource server debe rechazarlo con 401 antes de llegar al controller.\n\nPara probar un TOKEN EXPIRADO (no cubierto por este request, ya que Postman no puede fabricar uno valido por si solo):\n1. En Keycloak Admin Console, ve a Realm settings > Tokens > Access Token Lifespan y bajalo temporalmente a 30 segundos (o el minimo permitido).\n2. Corre el request '1. Obtener Token' para generar un access_token nuevo.\n3. Espera al menos 30-60 segundos sin volver a pedir token.\n4. Corre el request '4. Consultar prestamos (protegido)' (u otro protegido) - debe responder 401 porque el token ya expiro.\n5. No olvides devolver el Access Token Lifespan a su valor original (por defecto 5 minutos) al terminar la prueba."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Token malformado -> 401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10. Obtener Token para catalogo-service (ROLE_LIBRARIAN)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": { "type": "noauth" },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password" },
+            { "key": "client_id", "value": "{{client_id_catalogo}}" },
+            { "key": "client_secret", "value": "{{client_secret_catalogo}}" },
+            { "key": "username", "value": "{{username}}" },
+            { "key": "password", "value": "{{password}}" }
+          ]
+        },
+        "url": {
+          "raw": "{{keycloak_url}}/realms/{{realm}}/protocol/openid-connect/token",
+          "host": ["{{keycloak_url}}"],
+          "path": ["realms", "{{realm}}", "protocol", "openid-connect", "token"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const jsonData = pm.response.json();",
+              "if (jsonData.access_token) {",
+              "    pm.collectionVariables.set('access_token_catalogo', jsonData.access_token);",
+              "    console.log('access_token_catalogo guardado');",
+              "} else {",
+              "    console.log('No vino access_token, revisa que el cliente catalogo-service exista. Respuesta:', jsonData);",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11. Obtener Token para catalogo-service (ROLE_USER)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": { "type": "noauth" },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password" },
+            { "key": "client_id", "value": "{{client_id_catalogo}}" },
+            { "key": "client_secret", "value": "{{client_secret_catalogo}}" },
+            { "key": "username", "value": "{{username_user}}" },
+            { "key": "password", "value": "{{password_user}}" }
+          ]
+        },
+        "url": {
+          "raw": "{{keycloak_url}}/realms/{{realm}}/protocol/openid-connect/token",
+          "host": ["{{keycloak_url}}"],
+          "path": ["realms", "{{realm}}", "protocol", "openid-connect", "token"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const jsonData = pm.response.json();",
+              "if (jsonData.access_token) {",
+              "    pm.collectionVariables.set('access_token_catalogo_user', jsonData.access_token);",
+              "    console.log('access_token_catalogo_user guardado');",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "12. Consultar libro con ROLE_LIBRARIAN (debe dar 200)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token_catalogo}}" }]
+        },
+        "url": {
+          "raw": "{{catalogo_url}}/libros/{{libro_id_prueba}}",
+          "host": ["{{catalogo_url}}"],
+          "path": ["libros", "{{libro_id_prueba}}"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ROLE_LIBRARIAN puede consultar libro (200)', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "13. Consultar libro con ROLE_USER (debe dar 200)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token_catalogo_user}}" }]
+        },
+        "url": {
+          "raw": "{{catalogo_url}}/libros/{{libro_id_prueba}}",
+          "host": ["{{catalogo_url}}"],
+          "path": ["libros", "{{libro_id_prueba}}"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ROLE_USER SI puede consultar libro (200)', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "14. Actualizar disponibilidad con ROLE_USER (debe dar 403)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token_catalogo_user}}" }]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "true"
+        },
+        "url": {
+          "raw": "{{catalogo_url}}/libros/{{libro_id_prueba}}/disponibilidad",
+          "host": ["{{catalogo_url}}"],
+          "path": ["libros", "{{libro_id_prueba}}", "disponibilidad"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ROLE_USER NO puede actualizar disponibilidad (403 esperado)', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "15. Obtener Token para usuario-service (ROLE_LIBRARIAN)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": { "type": "noauth" },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password" },
+            { "key": "client_id", "value": "{{client_id_usuarios}}" },
+            { "key": "client_secret", "value": "{{client_secret_usuarios}}" },
+            { "key": "username", "value": "{{username}}" },
+            { "key": "password", "value": "{{password}}" }
+          ]
+        },
+        "url": {
+          "raw": "{{keycloak_url}}/realms/{{realm}}/protocol/openid-connect/token",
+          "host": ["{{keycloak_url}}"],
+          "path": ["realms", "{{realm}}", "protocol", "openid-connect", "token"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const jsonData = pm.response.json();",
+              "if (jsonData.access_token) {",
+              "    pm.collectionVariables.set('access_token_usuarios', jsonData.access_token);",
+              "    console.log('access_token_usuarios guardado');",
+              "} else {",
+              "    console.log('No vino access_token, revisa que el cliente usuario-service exista. Respuesta:', jsonData);",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "16. Obtener Token para usuario-service (ROLE_USER)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": { "type": "noauth" },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password" },
+            { "key": "client_id", "value": "{{client_id_usuarios}}" },
+            { "key": "client_secret", "value": "{{client_secret_usuarios}}" },
+            { "key": "username", "value": "{{username_user}}" },
+            { "key": "password", "value": "{{password_user}}" }
+          ]
+        },
+        "url": {
+          "raw": "{{keycloak_url}}/realms/{{realm}}/protocol/openid-connect/token",
+          "host": ["{{keycloak_url}}"],
+          "path": ["realms", "{{realm}}", "protocol", "openid-connect", "token"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const jsonData = pm.response.json();",
+              "if (jsonData.access_token) {",
+              "    pm.collectionVariables.set('access_token_usuarios_user', jsonData.access_token);",
+              "    console.log('access_token_usuarios_user guardado');",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "17. Consultar usuario con ROLE_LIBRARIAN (debe dar 200)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token_usuarios}}" }]
+        },
+        "url": {
+          "raw": "{{usuarios_url}}/usuarios/{{usuario_id_real}}",
+          "host": ["{{usuarios_url}}"],
+          "path": ["usuarios", "{{usuario_id_real}}"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ROLE_LIBRARIAN puede consultar usuario (200)', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "18. Consultar usuario con ROLE_USER (debe dar 403)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token_usuarios_user}}" }]
+        },
+        "url": {
+          "raw": "{{usuarios_url}}/usuarios/{{usuario_id_real}}",
+          "host": ["{{usuarios_url}}"],
+          "path": ["usuarios", "{{usuario_id_real}}"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ROLE_USER NO puede consultar usuario (403 esperado)', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "19. Obtener Token para notificacion-service (ROLE_LIBRARIAN)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": { "type": "noauth" },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password" },
+            { "key": "client_id", "value": "{{client_id_notificacion}}" },
+            { "key": "client_secret", "value": "{{client_secret_notificacion}}" },
+            { "key": "username", "value": "{{username}}" },
+            { "key": "password", "value": "{{password}}" }
+          ]
+        },
+        "url": {
+          "raw": "{{keycloak_url}}/realms/{{realm}}/protocol/openid-connect/token",
+          "host": ["{{keycloak_url}}"],
+          "path": ["realms", "{{realm}}", "protocol", "openid-connect", "token"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const jsonData = pm.response.json();",
+              "if (jsonData.access_token) {",
+              "    pm.collectionVariables.set('access_token_notificacion', jsonData.access_token);",
+              "    console.log('access_token_notificacion guardado');",
+              "} else {",
+              "    console.log('No vino access_token, revisa que el cliente notificacion-service exista. Respuesta:', jsonData);",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "20. Obtener Token para notificacion-service (ROLE_USER)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": { "type": "noauth" },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password" },
+            { "key": "client_id", "value": "{{client_id_notificacion}}" },
+            { "key": "client_secret", "value": "{{client_secret_notificacion}}" },
+            { "key": "username", "value": "{{username_user}}" },
+            { "key": "password", "value": "{{password_user}}" }
+          ]
+        },
+        "url": {
+          "raw": "{{keycloak_url}}/realms/{{realm}}/protocol/openid-connect/token",
+          "host": ["{{keycloak_url}}"],
+          "path": ["realms", "{{realm}}", "protocol", "openid-connect", "token"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const jsonData = pm.response.json();",
+              "if (jsonData.access_token) {",
+              "    pm.collectionVariables.set('access_token_notificacion_user', jsonData.access_token);",
+              "    console.log('access_token_notificacion_user guardado');",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "21. Enviar notificacion con ROLE_LIBRARIAN (debe dar 200)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token_notificacion}}" }]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"usuarioId\": \"{{usuario_id_prueba}}\",\n  \"mensaje\": \"Prueba manual desde Postman\"\n}"
+        },
+        "url": {
+          "raw": "{{notificacion_url}}/notificar",
+          "host": ["{{notificacion_url}}"],
+          "path": ["notificar"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ROLE_LIBRARIAN puede enviar notificacion (200)', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "22. Enviar notificacion con ROLE_USER (debe dar 403)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token_notificacion_user}}" }]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"usuarioId\": \"{{usuario_id_prueba}}\",\n  \"mensaje\": \"Prueba manual desde Postman\"\n}"
+        },
+        "url": {
+          "raw": "{{notificacion_url}}/notificar",
+          "host": ["{{notificacion_url}}"],
+          "path": ["notificar"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ROLE_USER NO puede enviar notificacion (403 esperado)', () => pm.response.to.have.status(403));"
             ]
           }
         }
