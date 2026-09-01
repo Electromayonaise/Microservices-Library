@@ -1,0 +1,56 @@
+services:
+  catalogo-service:
+    build: ./microservicio-catalogo
+    container_name: catalogo-service
+    ports:
+      - "8082:8082"
+    networks:
+      - biblioteca-net
+
+  notificacion-service:
+    build: ./microservicio-notificacion
+    container_name: notificacion-service
+    ports:
+      - "8084:8084"
+    networks:
+      - biblioteca-net
+
+  usuario-service:
+    build: ./microservicio-usuarios
+    container_name: usuario-service
+    ports:
+      - "8081:8081"
+    networks:
+      - biblioteca-net
+
+  circulacion-service:
+    build: ./microservicio-circulacion
+    container_name: circulacion-service
+    ports:
+      - "8083:8083"
+    environment:
+      # El Feign client resuelve estas URLs por nombre de servicio dentro de la red de Docker
+      CATALOGO_SERVICE_URL: http://catalogo-service:8082
+      NOTIFICACION_SERVICE_URL: http://notificacion-service:8084
+      # Keycloak sigue corriendo en el host (fuera de este compose, ver Paso 1 del PDF),
+      # por eso el CONTENEDOR lo alcanza via host.docker.internal en lugar de localhost.
+      # NOTA: en este entorno Keycloak quedó publicado en el puerto 8095 (no 8080) -
+      # ajusta este valor si tu contenedor de Keycloak usa otro puerto.
+      KEYCLOAK_ISSUER_URI: http://host.docker.internal:8095/realms/biblioteca
+      # KEYCLOAK_EXPECTED_ISSUER: el valor real del claim "iss" en los tokens - es el host/puerto
+      # con el que el CLIENTE (Postman, browser) le pide el token a Keycloak, normalmente localhost.
+      KEYCLOAK_EXPECTED_ISSUER: http://localhost:8095/realms/biblioteca
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+    extra_hosts:
+      # Necesario para que host.docker.internal resuelva en Docker sobre Linux;
+      # en Docker Desktop (Windows/Mac) ya funciona de forma nativa
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - catalogo-service
+      - notificacion-service
+    networks:
+      - biblioteca-net
+
+networks:
+  biblioteca-net:
+    driver: bridge

@@ -1,0 +1,287 @@
+{
+  "info": {
+    "name": "Biblioteca - Circulacion + Keycloak",
+    "description": "Requisitos: `docker compose up -d --build` corriendo (los 4 microservicios) y Keycloak con el realm `biblioteca` ya configurado (cliente `circulacion-service` confidencial, direct access grants ON, rol de REALM `ROLE_LIBRARIAN` asignado al usuario `librarian1`). Antes de correr la coleccion, edita las variables `client_secret` y `password` (Collection > Variables). Luego corre las requests EN ORDEN (1 a 5), con 'Run collection' o una por una - cada una depende de la anterior. Los datos son en memoria (H2): si vuelves a correr la coleccion despues de un `docker compose restart` de circulacion/catalogo, funciona igual sin tocar nada mas.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "keycloak_url", "value": "http://localhost:8095" },
+    { "key": "realm", "value": "biblioteca" },
+    { "key": "client_id", "value": "circulacion-service" },
+    { "key": "client_secret", "value": "PON_AQUI_TU_SECRET" },
+    { "key": "username", "value": "librarian1" },
+    { "key": "password", "value": "Librarian@2026" },
+    { "key": "username_user", "value": "user1" },
+    { "key": "password_user", "value": "User@2026" },
+    { "key": "circulacion_url", "value": "http://localhost:8083" },
+    { "key": "access_token", "value": "" },
+    { "key": "access_token_user", "value": "" },
+    { "key": "libro_id_prueba", "value": "1" },
+    { "key": "usuario_id_prueba", "value": "U001" },
+    { "key": "prestamo_id_devolver", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Obtener Token",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": { "type": "noauth" },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password" },
+            { "key": "client_id", "value": "{{client_id}}" },
+            { "key": "client_secret", "value": "{{client_secret}}" },
+            { "key": "username", "value": "{{username}}" },
+            { "key": "password", "value": "{{password}}" }
+          ]
+        },
+        "url": {
+          "raw": "{{keycloak_url}}/realms/{{realm}}/protocol/openid-connect/token",
+          "host": ["{{keycloak_url}}"],
+          "path": ["realms", "{{realm}}", "protocol", "openid-connect", "token"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const jsonData = pm.response.json();",
+              "if (jsonData.access_token) {",
+              "    pm.collectionVariables.set('access_token', jsonData.access_token);",
+              "    console.log('access_token guardado');",
+              "} else {",
+              "    console.log('No vino access_token, revisa client_secret/username/password. Respuesta:', jsonData);",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Status publico (sin token)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": { "type": "noauth" },
+        "url": {
+          "raw": "{{circulacion_url}}/circulacion/public/status",
+          "host": ["{{circulacion_url}}"],
+          "path": ["circulacion", "public", "status"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200 sin token', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Prestar libro (requiere ROLE_LIBRARIAN)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token}}" }]
+        },
+        "url": {
+          "raw": "{{circulacion_url}}/circulacion/prestar?usuarioId={{usuario_id_prueba}}&libroId={{libro_id_prueba}}",
+          "host": ["{{circulacion_url}}"],
+          "path": ["circulacion", "prestar"],
+          "query": [
+            { "key": "usuarioId", "value": "{{usuario_id_prueba}}" },
+            { "key": "libroId", "value": "{{libro_id_prueba}}" }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200 al prestar', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Consultar prestamos (protegido)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token}}" }]
+        },
+        "url": {
+          "raw": "{{circulacion_url}}/circulacion/prestamos",
+          "host": ["{{circulacion_url}}"],
+          "path": ["circulacion", "prestamos"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200 al consultar', () => pm.response.to.have.status(200));",
+              "const prestamos = pm.response.json();",
+              "const libroId = pm.collectionVariables.get('libro_id_prueba');",
+              "const activos = prestamos.filter(p => p.libroId && p.libroId.libroid_value === libroId && p.estado === 'ACTIVO');",
+              "const masReciente = activos[activos.length - 1];",
+              "if (masReciente) {",
+              "    pm.collectionVariables.set('prestamo_id_devolver', masReciente.id.prestamoid_value);",
+              "    console.log('prestamo_id_devolver guardado:', masReciente.id.prestamoid_value);",
+              "} else {",
+              "    console.log('No se encontro un prestamo ACTIVO para libroId=' + libroId + '. Corriste el paso 3 antes que este?');",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Devolver libro (requiere ROLE_LIBRARIAN)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token}}" }]
+        },
+        "url": {
+          "raw": "{{circulacion_url}}/circulacion/devolver?prestamoId={{prestamo_id_devolver}}",
+          "host": ["{{circulacion_url}}"],
+          "path": ["circulacion", "devolver"],
+          "query": [
+            { "key": "prestamoId", "value": "{{prestamo_id_devolver}}" }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200 al devolver', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Obtener Token (usuario ROLE_USER)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": { "type": "noauth" },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password" },
+            { "key": "client_id", "value": "{{client_id}}" },
+            { "key": "client_secret", "value": "{{client_secret}}" },
+            { "key": "username", "value": "{{username_user}}" },
+            { "key": "password", "value": "{{password_user}}" }
+          ]
+        },
+        "url": {
+          "raw": "{{keycloak_url}}/realms/{{realm}}/protocol/openid-connect/token",
+          "host": ["{{keycloak_url}}"],
+          "path": ["realms", "{{realm}}", "protocol", "openid-connect", "token"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const jsonData = pm.response.json();",
+              "if (jsonData.access_token) {",
+              "    pm.collectionVariables.set('access_token_user', jsonData.access_token);",
+              "    console.log('access_token_user guardado');",
+              "} else {",
+              "    console.log('No vino access_token, revisa que user1 exista con password_user correcta. Respuesta:', jsonData);",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Consultar prestamos con ROLE_USER (debe dar 200)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token_user}}" }]
+        },
+        "url": {
+          "raw": "{{circulacion_url}}/circulacion/prestamos",
+          "host": ["{{circulacion_url}}"],
+          "path": ["circulacion", "prestamos"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ROLE_USER SI puede consultar prestamos (200)', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Prestar libro con ROLE_USER (debe dar 403)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{access_token_user}}" }]
+        },
+        "url": {
+          "raw": "{{circulacion_url}}/circulacion/prestar?usuarioId={{usuario_id_prueba}}&libroId=2",
+          "host": ["{{circulacion_url}}"],
+          "path": ["circulacion", "prestar"],
+          "query": [
+            { "key": "usuarioId", "value": "{{usuario_id_prueba}}" },
+            { "key": "libroId", "value": "2" }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ROLE_USER NO puede prestar (403 esperado)', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

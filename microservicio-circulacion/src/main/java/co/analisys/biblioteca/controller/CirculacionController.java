@@ -8,6 +8,7 @@ import co.analisys.biblioteca.service.CirculacionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -26,6 +27,7 @@ public class CirculacionController {
                     "al usuario del préstamo."
     )
     @PostMapping("/prestar")
+    @PreAuthorize("hasAuthority('ROLE_LIBRARIAN')")
     public void prestarLibro(@RequestParam String usuarioId, @RequestParam String libroId) {
         circulacionService.prestarLibro(new UsuarioId(usuarioId), new LibroId(libroId));
     }
@@ -36,6 +38,7 @@ public class CirculacionController {
                     "disponible nuevamente y notifica al usuario de la devolución."
     )
     @PostMapping("/devolver")
+    @PreAuthorize("hasAuthority('ROLE_LIBRARIAN')")
     public void devolverLibro(@RequestParam String prestamoId) {
         circulacionService.devolverLibro(new PrestamoId(prestamoId));
     }
@@ -47,7 +50,18 @@ public class CirculacionController {
                     "base de datos, de lo contrario no podrá acceder a esta información."
     )
     @GetMapping("/prestamos")
+    @PreAuthorize("hasAnyAuthority('ROLE_LIBRARIAN', 'ROLE_USER')")
     public List<Prestamo> obtenerTodosPrestamos() {
         return circulacionService.obtenerTodosPrestamos();
+    }
+
+    @Operation(
+            summary = "Estado del servicio",
+            description = "Endpoint público, sin autenticación, para verificar que el servicio de " +
+                    "circulación está en funcionamiento."
+    )
+    @GetMapping("/public/status")
+    public String getPublicStatus() {
+        return "El servicio de circulación está funcionando correctamente";
     }
 }
