@@ -4,6 +4,20 @@ services:
     container_name: catalogo-service
     ports:
       - "8082:8082"
+    environment:
+      # Keycloak sigue corriendo en el host (fuera de este compose, ver Paso 1 del PDF),
+      # por eso el CONTENEDOR lo alcanza via host.docker.internal en lugar de localhost.
+      # NOTA: en este entorno Keycloak quedó publicado en el puerto 8095 (no 8080) -
+      # ajusta este valor si tu contenedor de Keycloak usa otro puerto.
+      KEYCLOAK_ISSUER_URI: http://host.docker.internal:8095/realms/biblioteca
+      # KEYCLOAK_EXPECTED_ISSUER: el valor real del claim "iss" en los tokens - es el host/puerto
+      # con el que el CLIENTE (Postman, browser) le pide el token a Keycloak, normalmente localhost.
+      KEYCLOAK_EXPECTED_ISSUER: http://localhost:8095/realms/biblioteca
+      # Clientes de Keycloak (claim azp) cuyos tokens acepta: el propio y circulacion-service
+      # (porque le propaga el token al llamar via Feign).
+      KEYCLOAK_ALLOWED_CLIENTS: catalogo-service,circulacion-service
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - biblioteca-net
 
@@ -12,6 +26,12 @@ services:
     container_name: notificacion-service
     ports:
       - "8084:8084"
+    environment:
+      KEYCLOAK_ISSUER_URI: http://host.docker.internal:8095/realms/biblioteca
+      KEYCLOAK_EXPECTED_ISSUER: http://localhost:8095/realms/biblioteca
+      KEYCLOAK_ALLOWED_CLIENTS: notificacion-service,circulacion-service
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - biblioteca-net
 
@@ -20,6 +40,13 @@ services:
     container_name: usuario-service
     ports:
       - "8081:8081"
+    environment:
+      KEYCLOAK_ISSUER_URI: http://host.docker.internal:8095/realms/biblioteca
+      KEYCLOAK_EXPECTED_ISSUER: http://localhost:8095/realms/biblioteca
+      # Nadie llama a usuario-service via Feign, asi que solo confia en su propio cliente.
+      KEYCLOAK_ALLOWED_CLIENTS: usuario-service
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - biblioteca-net
 
