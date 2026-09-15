@@ -30,6 +30,8 @@ services:
       KEYCLOAK_ISSUER_URI: http://host.docker.internal:8095/realms/biblioteca
       KEYCLOAK_EXPECTED_ISSUER: http://localhost:8095/realms/biblioteca
       KEYCLOAK_ALLOWED_CLIENTS: notificacion-service,circulacion-service
+      # RabbitMQ corre en el host (fuera de este compose, ver docs/docker), igual que Keycloak.
+      SPRING_RABBITMQ_HOST: host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -56,9 +58,8 @@ services:
     ports:
       - "8083:8083"
     environment:
-      # El Feign client resuelve estas URLs por nombre de servicio dentro de la red de Docker
+      # El Feign client resuelve esta URL por nombre de servicio dentro de la red de Docker
       CATALOGO_SERVICE_URL: http://catalogo-service:8082
-      NOTIFICACION_SERVICE_URL: http://notificacion-service:8084
       # Keycloak sigue corriendo en el host (fuera de este compose, ver Paso 1 del PDF),
       # por eso el CONTENEDOR lo alcanza via host.docker.internal en lugar de localhost.
       # NOTA: en este entorno Keycloak quedó publicado en el puerto 8095 (no 8080) -
@@ -68,13 +69,15 @@ services:
       # con el que el CLIENTE (Postman, browser) le pide el token a Keycloak, normalmente localhost.
       KEYCLOAK_EXPECTED_ISSUER: http://localhost:8095/realms/biblioteca
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+      # RabbitMQ corre en el host (fuera de este compose, ver docs/docker), igual que Keycloak.
+      # Circulacion publica en notificacion.exchange en vez de llamar a notificacion-service via Feign.
+      SPRING_RABBITMQ_HOST: host.docker.internal
     extra_hosts:
       # Necesario para que host.docker.internal resuelva en Docker sobre Linux;
       # en Docker Desktop (Windows/Mac) ya funciona de forma nativa
       - "host.docker.internal:host-gateway"
     depends_on:
       - catalogo-service
-      - notificacion-service
     networks:
       - biblioteca-net
 

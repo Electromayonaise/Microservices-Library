@@ -1,13 +1,13 @@
 package co.analisys.biblioteca.service;
 
 import co.analisys.biblioteca.client.CatalogoClient;
-import co.analisys.biblioteca.client.NotificacionClient;
 import co.analisys.biblioteca.dto.NotificacionDTO;
 import co.analisys.biblioteca.exception.LibroNoDisponibleException;
 import co.analisys.biblioteca.exception.PrestamoNoEncontradoException;
 import co.analisys.biblioteca.model.*;
 import co.analisys.biblioteca.repository.PrestamoRepository;
 import jakarta.transaction.Transactional;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import java.util.List;
@@ -20,7 +20,7 @@ public class CirculacionService {
     @Autowired
     private CatalogoClient catalogoClient;
     @Autowired
-    private NotificacionClient notificacionClient;
+    private RabbitTemplate rabbitTemplate;
 
     @Transactional
     public void prestarLibro(UsuarioId usuarioId, LibroId libroId) {
@@ -35,9 +35,10 @@ public class CirculacionService {
                     EstadoPrestamo.ACTIVO);
             prestamoRepository.save(prestamo);
             catalogoClient.actualizarDisponibilidad(libroId.getLibroid_value(), false);
-            notificacionClient.enviarNotificacion(
-                    new NotificacionDTO(usuarioId.getUsuarioid_value(), "Libro prestado: " +
-                            libroId.getLibroid_value()));
+
+            NotificacionDTO notificacion = new NotificacionDTO(usuarioId.getUsuarioid_value(),
+                    "Libro prestado: " + libroId.getLibroid_value());
+            rabbitTemplate.convertAndSend("notificacion.exchange", "notificacion.routingkey", notificacion);
         } else {
             throw new LibroNoDisponibleException(libroId);
         }
@@ -50,9 +51,10 @@ public class CirculacionService {
         prestamo.setEstado(EstadoPrestamo.DEVUELTO);
         prestamoRepository.save(prestamo);
         catalogoClient.actualizarDisponibilidad(prestamo.getLibroId().getLibroid_value(), true);
-        notificacionClient.enviarNotificacion(
-                new NotificacionDTO(prestamo.getUsuarioId().getUsuarioid_value(),
-                        "Libro devuelto: " + prestamo.getLibroId().getLibroid_value()));
+
+        NotificacionDTO notificacion = new NotificacionDTO(prestamo.getUsuarioId().getUsuarioid_value(),
+                "Libro devuelto: " + prestamo.getLibroId().getLibroid_value());
+        rabbitTemplate.convertAndSend("notificacion.exchange", "notificacion.routingkey", notificacion);
     }
 
     public List<Prestamo> obtenerTodosPrestamos() {
