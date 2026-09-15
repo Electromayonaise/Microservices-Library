@@ -72,12 +72,9 @@ Esto crea el realm `biblioteca` con los 4 clientes (`catalogo-service`, `circula
 
 ### Obtener los client secrets
 
-Por seguridad, los secretos no viajan en el export (`entregables/biblioteca-realm-export.json` los trae enmascarados). Para cada uno de los 4 clientes:
+Por seguridad, los secretos no viajan en claro en el export — `entregables/biblioteca-realm-export.json` los trae enmascarados con el literal `**********`. Si importaste ese export tal cual (sin regenerar nada), ese mismo literal `**********` queda como el secreto real de los 4 clientes, y es el valor que ya viene precargado en la colección de Postman (variables `client_secret*`) — no necesitas ir a buscarlo.
 
-1. **Clients** → selecciona el cliente (p. ej. `circulacion-service`) → pestaña **Credentials**.
-2. Copia el **Client secret**, o dale a **Regenerate** si prefieres uno nuevo.
-
-Necesitarás los 4 secretos (uno por cliente) para el paso de Postman/newman más abajo.
+Solo si regeneraste algún secreto manualmente (**Clients** → el cliente → pestaña **Credentials** → **Regenerate**) necesitas actualizar esa variable puntual en la colección o pasarla por `--env-var` como se muestra abajo.
 
 ## 3. Levantar los microservicios
 
@@ -104,7 +101,13 @@ Para bajar la stack: `docker compose down`.
 
 La colección [entregables/Biblioteca-Library.postman_collection.json](entregables/Biblioteca-Library.postman_collection.json) obtiene tokens contra cada uno de los 4 clientes y prueba, por servicio: acceso con el rol correcto (200), acceso con rol incorrecto (403) y token inválido/malformado (401). También incluye una carpeta **RabbitMQ** que, tras el préstamo exitoso (request 3, que ahora publica de forma asíncrona en `notificacion.exchange` en vez de llamar a notificacion-service via Feign), consulta la Management API de RabbitMQ para confirmar que `notificacion.queue` procesó el mensaje.
 
-Los secretos se pasan como variables de entorno de newman (nunca se escriben en el archivo de la colección):
+Si importaste el realm desde el export incluido y no regeneraste secretos, la colección ya trae todo precargado (client secrets = `**********`, usuarios `librarian1`/`user1`, RabbitMQ `guest`/`guest`) y basta con:
+
+```bash
+newman run entregables/Biblioteca-Library.postman_collection.json
+```
+
+Si regeneraste algún secreto real en Keycloak, sobreescribe solo esa variable con `--env-var` (nunca se escriben en el archivo de la colección):
 
 **bash / zsh:**
 
@@ -126,7 +129,7 @@ newman run entregables/Biblioteca-Library.postman_collection.json `
   --env-var client_secret_notificacion=<SECRET_NOTIFICACION>
 ```
 
-No hace falta pasar ningún secreto nuevo para la carpeta RabbitMQ: usa `guest`/`guest`, las credenciales por defecto de la consola de administración de RabbitMQ en local (variables `rabbitmq_user`/`rabbitmq_password` de la colección). Si en tu entorno cambiaste esas credenciales, pásalas igual que las demás con `--env-var rabbitmq_user=<...> --env-var rabbitmq_password=<...>`.
+Lo mismo aplica si cambiaste las credenciales de RabbitMQ (`--env-var rabbitmq_user=<...> --env-var rabbitmq_password=<...>`), que por defecto son `guest`/`guest`.
 
 Debe terminar con **25/25 assertions** en verde. El ítem "Token inválido/malformado" incluye en su descripción instrucciones adicionales para simular un token expirado (bajando temporalmente el *Access Token Lifespan* del realm en Keycloak).
 
