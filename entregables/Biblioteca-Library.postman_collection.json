@@ -1,7 +1,7 @@
 {
   "info": {
-    "name": "Biblioteca - Circulacion + Keycloak",
-    "description": "Requisitos: `docker compose up -d --build` corriendo (los 4 microservicios) y Keycloak con el realm `biblioteca` ya configurado, con 4 clientes CONFIDENCIALES (direct access grants ON): `circulacion-service`, `catalogo-service`, `notificacion-service`, `usuario-service`. Roles de REALM `ROLE_LIBRARIAN` (asignado a `librarian1`) y `ROLE_USER` (asignado a `user1`).\n\nCada microservicio valida no solo el rol sino tambien el claim `azp` del token (que cliente de Keycloak lo emitio) contra su propia whitelist `keycloak.allowed-clients` - por eso hay un request '(Obtener Token)' dedicado por cada cliente/servicio en vez de reusar siempre el mismo token. Cada cliente tiene su propio secret en Keycloak, por eso hay 4 variables separadas: `client_secret` (circulacion-service), `client_secret_catalogo`, `client_secret_usuarios`, `client_secret_notificacion`.\n\nAntes de correr la coleccion, edita esas 4 variables de secret y las de `password` (Collection > Variables). Luego corre las requests EN ORDEN, con 'Run collection' o una por una - la mayoria dependen de las anteriores (tokens guardados en variables). Los datos son en memoria (H2): si vuelves a correr la coleccion despues de un `docker compose restart`, funciona igual sin tocar nada mas.\n\nRequests 1-8: flujo original de circulacion-service (token, endpoint publico, prestar/consultar/devolver con ROLE_LIBRARIAN, y verificacion de que ROLE_USER puede consultar pero no prestar).\nRequest 9: token invalido/malformado contra catalogo-service (401) + instrucciones para probar un token EXPIRADO manualmente.\nRequests 10-14: catalogo-service, usando su propio cliente `catalogo-service` (ROLE_LIBRARIAN y ROLE_USER pueden consultar libros; solo ROLE_LIBRARIAN puede actualizar disponibilidad).\nRequests 15-18: usuario-service, usando su propio cliente `usuario-service` (solo ROLE_LIBRARIAN puede consultar; ROLE_USER recibe 403).\nRequests 19-22: notificacion-service, usando su propio cliente `notificacion-service` (solo ROLE_LIBRARIAN puede enviar notificaciones; ROLE_USER recibe 403).",
+    "name": "Biblioteca - Library",
+    "description": "Requisitos: `docker compose up -d --build` corriendo (los 4 microservicios), Keycloak con el realm `biblioteca` ya configurado, con 4 clientes CONFIDENCIALES (direct access grants ON): `circulacion-service`, `catalogo-service`, `notificacion-service`, `usuario-service`, y RabbitMQ corriendo (ver Paso 1 del PDF de RabbitMQ / seccion correspondiente del README). Roles de REALM `ROLE_LIBRARIAN` (asignado a `librarian1`) y `ROLE_USER` (asignado a `user1`).\n\nCada microservicio valida no solo el rol sino tambien el claim `azp` del token (que cliente de Keycloak lo emitio) contra su propia whitelist `keycloak.allowed-clients` - por eso hay un request '(Obtener Token)' dedicado por cada cliente/servicio en vez de reusar siempre el mismo token. Cada cliente tiene su propio secret en Keycloak, por eso hay 4 variables separadas: `client_secret` (circulacion-service), `client_secret_catalogo`, `client_secret_usuarios`, `client_secret_notificacion`.\n\nAntes de correr la coleccion, edita esas 4 variables de secret y las de `password` (Collection > Variables). Luego corre las requests EN ORDEN, con 'Run collection' o una por una - la mayoria dependen de las anteriores (tokens guardados en variables). Los datos son en memoria (H2): si vuelves a correr la coleccion despues de un `docker compose restart`, funciona igual sin tocar nada mas.\n\nRequests 1-8: flujo original de circulacion-service (token, endpoint publico, prestar/consultar/devolver con ROLE_LIBRARIAN, y verificacion de que ROLE_USER puede consultar pero no prestar).\nRequest 9: token invalido/malformado contra catalogo-service (401) + instrucciones para probar un token EXPIRADO manualmente.\nRequests 10-14: catalogo-service, usando su propio cliente `catalogo-service` (ROLE_LIBRARIAN y ROLE_USER pueden consultar libros; solo ROLE_LIBRARIAN puede actualizar disponibilidad).\nRequests 15-18: usuario-service, usando su propio cliente `usuario-service` (solo ROLE_LIBRARIAN puede consultar; ROLE_USER recibe 403).\nRequests 19-22: notificacion-service, usando su propio cliente `notificacion-service` (solo ROLE_LIBRARIAN puede enviar notificaciones; ROLE_USER recibe 403).\nCarpeta 'RabbitMQ': tras el prestamo exitoso del request 3 (que ahora publica de forma asincronica en `notificacion.exchange` en vez de llamar a notificacion-service via Feign), consulta la Management API de RabbitMQ para confirmar que `notificacion.queue` proceso el mensaje (backlog en 0 y al menos 1 mensaje entregado).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -34,7 +34,10 @@
     { "key": "libro_id_prueba", "value": "1" },
     { "key": "usuario_id_prueba", "value": "U001" },
     { "key": "usuario_id_real", "value": "1" },
-    { "key": "prestamo_id_devolver", "value": "" }
+    { "key": "prestamo_id_devolver", "value": "" },
+    { "key": "rabbitmq_url", "value": "http://localhost:15672" },
+    { "key": "rabbitmq_user", "value": "guest" },
+    { "key": "rabbitmq_password", "value": "guest" }
   ],
   "item": [
     {
@@ -771,6 +774,46 @@
               "pm.test('ROLE_USER NO puede enviar notificacion (403 esperado)', () => pm.response.to.have.status(403));"
             ]
           }
+        }
+      ]
+    },
+    {
+      "name": "RabbitMQ - verificacion async (circulacion -> notificacion)",
+      "item": [
+        {
+          "name": "23. Verificar consumo de notificacion.queue (RabbitMQ Management API)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "basic",
+              "basic": [
+                { "key": "username", "value": "{{rabbitmq_user}}" },
+                { "key": "password", "value": "{{rabbitmq_password}}" }
+              ]
+            },
+            "url": {
+              "raw": "{{rabbitmq_url}}/api/queues/%2F/notificacion.queue",
+              "host": ["{{rabbitmq_url}}"],
+              "path": ["api", "queues", "%2F", "notificacion.queue"]
+            },
+            "description": "Requiere que el request '3. Prestar libro' ya se haya corrido antes (publica en notificacion.exchange). Si corres solo esta carpeta sin haber corrido el resto de la coleccion primero, 'deliver_get' puede venir en 0."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('RabbitMQ Management API responde 200', () => pm.response.to.have.status(200));",
+                  "const jsonData = pm.response.json();",
+                  "pm.test('notificacion.queue sin backlog (todo consumido)', () => pm.expect(jsonData.messages).to.eql(0));",
+                  "const entregados = (jsonData.message_stats && jsonData.message_stats.deliver_get) || 0;",
+                  "pm.test('Al menos un mensaje fue entregado y confirmado por notificacion-service', () => pm.expect(entregados).to.be.at.least(1));"
+                ]
+              }
+            }
+          ]
         }
       ]
     }

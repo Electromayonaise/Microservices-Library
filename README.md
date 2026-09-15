@@ -102,14 +102,14 @@ Para bajar la stack: `docker compose down`.
 
 ## 4. Correr la colección de Postman con newman
 
-La colección [entregables/Biblioteca-Keycloak.postman_collection.json](entregables/Biblioteca-Keycloak.postman_collection.json) obtiene tokens contra cada uno de los 4 clientes y prueba, por servicio: acceso con el rol correcto (200), acceso con rol incorrecto (403) y token inválido/malformado (401).
+La colección [entregables/Biblioteca-Library.postman_collection.json](entregables/Biblioteca-Library.postman_collection.json) obtiene tokens contra cada uno de los 4 clientes y prueba, por servicio: acceso con el rol correcto (200), acceso con rol incorrecto (403) y token inválido/malformado (401). También incluye una carpeta **RabbitMQ** que, tras el préstamo exitoso (request 3, que ahora publica de forma asíncrona en `notificacion.exchange` en vez de llamar a notificacion-service via Feign), consulta la Management API de RabbitMQ para confirmar que `notificacion.queue` procesó el mensaje.
 
 Los secretos se pasan como variables de entorno de newman (nunca se escriben en el archivo de la colección):
 
 **bash / zsh:**
 
 ```bash
-newman run entregables/Biblioteca-Keycloak.postman_collection.json \
+newman run entregables/Biblioteca-Library.postman_collection.json \
   --env-var client_secret=<SECRET_CIRCULACION> \
   --env-var client_secret_catalogo=<SECRET_CATALOGO> \
   --env-var client_secret_usuarios=<SECRET_USUARIO> \
@@ -119,14 +119,16 @@ newman run entregables/Biblioteca-Keycloak.postman_collection.json \
 **PowerShell:**
 
 ```powershell
-newman run entregables/Biblioteca-Keycloak.postman_collection.json `
+newman run entregables/Biblioteca-Library.postman_collection.json `
   --env-var client_secret=<SECRET_CIRCULACION> `
   --env-var client_secret_catalogo=<SECRET_CATALOGO> `
   --env-var client_secret_usuarios=<SECRET_USUARIO> `
   --env-var client_secret_notificacion=<SECRET_NOTIFICACION>
 ```
 
-Debe terminar con **22/22 assertions** en verde. El ítem "Token inválido/malformado" incluye en su descripción instrucciones adicionales para simular un token expirado (bajando temporalmente el *Access Token Lifespan* del realm en Keycloak).
+No hace falta pasar ningún secreto nuevo para la carpeta RabbitMQ: usa `guest`/`guest`, las credenciales por defecto de la consola de administración de RabbitMQ en local (variables `rabbitmq_user`/`rabbitmq_password` de la colección). Si en tu entorno cambiaste esas credenciales, pásalas igual que las demás con `--env-var rabbitmq_user=<...> --env-var rabbitmq_password=<...>`.
+
+Debe terminar con **25/25 assertions** en verde. El ítem "Token inválido/malformado" incluye en su descripción instrucciones adicionales para simular un token expirado (bajando temporalmente el *Access Token Lifespan* del realm en Keycloak).
 
 ## Estructura del repositorio
 
