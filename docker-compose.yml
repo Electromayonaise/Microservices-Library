@@ -32,8 +32,12 @@ services:
       KEYCLOAK_ALLOWED_CLIENTS: notificacion-service,circulacion-service
       # RabbitMQ corre en el host (fuera de este compose, ver docs/docker), igual que Keycloak.
       SPRING_RABBITMQ_HOST: host.docker.internal
+      # Kafka corre dentro de este compose: se alcanza por nombre de servicio en la red de Docker.
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - kafka
     networks:
       - biblioteca-net
 
@@ -72,12 +76,47 @@ services:
       # RabbitMQ corre en el host (fuera de este compose, ver docs/docker), igual que Keycloak.
       # Circulacion publica en notificacion.exchange en vez de llamar a notificacion-service via Feign.
       SPRING_RABBITMQ_HOST: host.docker.internal
+      # Las devoluciones se publican en el topic Kafka "devolucion-libro" (ver config/KafkaConfig).
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     extra_hosts:
       # Necesario para que host.docker.internal resuelva en Docker sobre Linux;
       # en Docker Desktop (Windows/Mac) ya funciona de forma nativa
       - "host.docker.internal:host-gateway"
     depends_on:
       - catalogo-service
+      - kafka
+    networks:
+      - biblioteca-net
+
+  # Kafka (guia 2_Implementar Kafka...). Se fija la version 7.6.0 en vez de "latest" porque las
+  # imagenes cp-kafka 8.x ya no soportan Zookeeper (solo KRaft) y este setup lo usa.
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "22181:2181"
+    networks:
+      - biblioteca-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # kafka:9092 lo usan los contenedores de esta red; localhost:29092 lo usa el host
+      # (servicios corridos fuera de Docker, Offset Explorer, kafka-console-* desde el host).
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     networks:
       - biblioteca-net
 

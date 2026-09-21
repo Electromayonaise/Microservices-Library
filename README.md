@@ -6,10 +6,10 @@ Sistema de biblioteca compuesto por 4 microservicios Spring Boot, todos protegid
 
 | Servicio | Puerto | Responsabilidad | Cliente Keycloak (`azp`) |
 |---|---|---|---|
-| [`microservicio-circulacion`](microservicio-circulacion/) | `8083` | Préstamo y devolución de libros. Orquesta llamadas a `catalogo-service` y `notificacion-service` vía Feign, propagando el JWT del usuario autenticado. | `circulacion-service` |
+| [`microservicio-circulacion`](microservicio-circulacion/) | `8083` | Préstamo y devolución de libros. Llama a `catalogo-service` vía Feign (propagando el JWT del usuario autenticado) y publica las notificaciones de forma asíncrona: préstamos por **RabbitMQ**, devoluciones por **Kafka**. | `circulacion-service` |
 | [`microservicio-catalogo`](microservicio-catalogo/) | `8082` | Consulta y actualización del catálogo de libros (disponibilidad, búsqueda). | `catalogo-service` |
 | [`microservicio-usuarios`](microservicio-usuarios/) | `8081` | Consulta y actualización de datos de usuarios. | `usuario-service` |
-| [`microservicio-notificacion`](microservicio-notificacion/) | `8084` | Envío de notificaciones, invocado internamente por `circulacion-service`. | `notificacion-service` |
+| [`microservicio-notificacion`](microservicio-notificacion/) | `8084` | Envío de notificaciones. Consume la cola RabbitMQ `notificacion.queue` (préstamos) y el topic Kafka `devolucion-libro` (devoluciones); además expone `POST /notificar`. | `notificacion-service` |
 
 Todos corren contra el realm `biblioteca` de Keycloak, expuesto en `http://localhost:8095`.
 
@@ -19,7 +19,7 @@ Todos corren contra el realm `biblioteca` de Keycloak, expuesto en `http://local
 - Cada endpoint usa `@PreAuthorize` según el rol requerido (ver el detalle completo, con capturas de Swagger por endpoint, en [docs/swagger-endpoints.md](docs/swagger-endpoints.md)).
 - Cada servicio valida no solo el emisor (`iss`) del token sino también el cliente que lo solicitó (claim `azp`), contra una whitelist (`keycloak.allowed-clients`):
   - `circulacion-service` y `usuario-service` solo confían en su propio cliente.
-  - `catalogo-service` y `notificacion-service` también confían en `circulacion-service`, porque reciben el token propagado vía Feign cuando `circulacion-service` los llama internamente.
+  - `catalogo-service` también confía en `circulacion-service`, porque recibe el token propagado vía Feign cuando `circulacion-service` lo llama internamente. `notificacion-service` conserva a `circulacion-service` en su whitelist, aunque ya no lo llama por HTTP (las notificaciones llegan por RabbitMQ/Kafka, que no usan JWT).
 
 ## Requisitos previos
 
@@ -76,7 +76,17 @@ Por seguridad, los secretos no viajan en claro en el export — `entregables/bib
 
 Solo si regeneraste algún secreto manualmente (**Clients** → el cliente → pestaña **Credentials** → **Regenerate**) necesitas actualizar esa variable puntual en la colección o pasarla por `--env-var` como se muestra abajo.
 
-## 3. Levantar los microservicios
+## 3. Levantar RabbitMQ
+
+Como Keycloak, RabbitMQ corre por fuera del `docker-compose.yml` (los contenedores lo alcanzan vía `host.docker.internal`):
+
+```bash
+docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3.13-management
+```
+
+Consola de administración en `http://localhost:15672` (usuario `guest` / `guest`). Circulación declara la cola `notificacion.queue`, el exchange `notificacion.exchange` y el binding al arrancar.
+
+## 4. Levantar los microservicios (y Kafka)
 
 Desde la raíz del repo:
 
@@ -84,7 +94,17 @@ Desde la raíz del repo:
 docker compose up -d --build
 ```
 
-Esto construye y levanta los 4 microservicios (`docker-compose.yml`), cada uno configurado para alcanzar Keycloak en `host.docker.internal:8095`. Verifica que arrancaron bien:
+Esto construye y levanta los 4 microservicios (`docker-compose.yml`), cada uno configurado para alcanzar Keycloak en `host.docker.internal:8095`, junto con **Zookeeper y Kafka** (que sí van dentro del compose: los servicios lo alcanzan como `kafka:9092`, y desde el host queda en `localhost:29092`). Las imágenes de Confluent están fijadas en `7.6.0` porque `cp-kafka:latest` (8.x) ya no soporta Zookeeper.
+
+Crea el topic de las devoluciones una sola vez (equivale a hacerlo con Offset Explorer, con 1 partición y factor de replicación 1):
+
+```bash
+docker exec kafka kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic devolucion-libro --partitions 1 --replication-factor 1
+```
+
+> En Git Bash de Windows antepón `MSYS_NO_PATHCONV=1` al comando si notas que reescribe rutas.
+
+Verifica que los servicios arrancaron bien:
 
 ```bash
 curl http://localhost:8081/v3/api-docs   # usuario-service
@@ -97,7 +117,7 @@ Swagger UI de cada uno queda en `http://localhost:808{1,2,3,4}/swagger-ui.html` 
 
 Para bajar la stack: `docker compose down`.
 
-## 4. Correr la colección de Postman con newman
+## 5. Correr la colección de Postman con newman
 
 La colección [entregables/Biblioteca-Library.postman_collection.json](entregables/Biblioteca-Library.postman_collection.json) obtiene tokens contra cada uno de los 4 clientes y prueba, por servicio: acceso con el rol correcto (200), acceso con rol incorrecto (403) y token inválido/malformado (401). También incluye una carpeta **RabbitMQ** que, tras el préstamo exitoso (request 3, que ahora publica de forma asíncrona en `notificacion.exchange` en vez de llamar a notificacion-service via Feign), consulta la Management API de RabbitMQ para confirmar que `notificacion.queue` procesó el mensaje.
 
